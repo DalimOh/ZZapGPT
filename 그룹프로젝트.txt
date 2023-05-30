@@ -1,0 +1,6 @@
+chatGPT(ID[PK], name, version)
+conversation(cID[pk], status, startTime, endTime, subject)
+question(qID[pk], query, timeQu, category)
+feedback(fID[pk], answer, timeFeed, mood, raiting)
+chatHistory(chatID[pk], userID, duration, transcript)
+user(userID[pk], email, name, regDate, location, age, preference[m])

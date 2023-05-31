@@ -2,24 +2,61 @@ import openai
 import tkinter as tk
 import sqlite3
 import datetime
+import uuid
+import re
 
 # Connect to the database
-conn = sqlite3.connect('your_database.db')
+conn = sqlite3.connect('zzapgpt.db')
 cursor = conn.cursor()
 
 # personal openai keys
-openai.api_key = "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"
+openai.api_key = "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"
+
+def extract_subject(cID):
+    query = '''
+    SELECT query
+    FROM question
+    WHERE curConv = ? AND timeQu = (
+        SELECT MIN(timeQu)
+        FROM question
+        WHERE curConv = ?
+    )
+    '''
+    cursor.execute(query, (cID, cID))
+    result = cursor.fetchone()
+    if result:
+        result = result[0]
+    else:
+        result = ""
+
+    # Define a list of common question words to remove from the user input
+    question_words = ['how', 'what', 'where', 'when', 'why', 'which', 'who', 'whom']
+
+    # Remove question words from the user input
+    cleaned_input = re.sub(r'\b(?:%s)\b' % '|'.join(question_words), '', result, flags=re.IGNORECASE)
+
+    # Remove leading/trailing whitespace and punctuation marks
+    cleaned_input = cleaned_input.strip(' ?.,!')
+
+    # Capitalize the first letter of the subject
+    subject = cleaned_input.capitalize()
+
+    return subject
 
 def init_user():
 
+    uID = "U-"+str(uuid.uuid4())
     # user 정보 한번만 기입
-    cursor.execute('''
+    query = '''
     INSERT INTO user (userID, name, email, regDate, age, location)
-    SELECT "U-00000000", "홍길동", "honggildong@naver.com", "2023/05/31", 20, "Seoul"
+    SELECT ?, "홍길동", "honggildong@naver.com", "2023/05/31", 20, "Seoul"
     WHERE NOT EXISTS (
         SELECT 1 FROM user
     )
-    ''')
+    '''
+    cursor.execute(query, (uID,))
+
+    return uID
 
 
 def init_table():
@@ -45,28 +82,28 @@ def init_table():
     ''')
 
     cursor.execute('''
-    CREATE TABLE conversation (
+    CREATE TABLE IF NOT EXISTS conversation (
         cID TEXT PRIMARY KEY,
         status INTEGER NOT NULL DEFAULT 0,
-        startTime TEXT,
-        endTime TEXT,
+        startTime TIMESTAMP,
+        endTime TIMESTAMP,
         curUser TEXT,
         FOREIGN KEY (curUser) REFERENCES user(userID)
     )
     ''')
 
     cursor.execute('''
-    CREATE TABLE category (
+    CREATE TABLE IF NOT EXISTS category (
         cgID CHAR(8) PRIMARY KEY,
         name TEXT NOT NULL
     )
     ''')
 
     cursor.execute('''
-    CREATE TABLE question (
+    CREATE TABLE IF NOT EXISTS question (
         qID TEXT PRIMARY KEY,
         query TEXT NOT NULL,
-        timeQu TEXT,
+        timeQu TIMESTAMP,
         qCg CHAR(8),
         curConv TEXT,
         FOREIGN KEY (qCg) REFERENCES category(cgID),
@@ -75,20 +112,20 @@ def init_table():
     ''')
 
     cursor.execute('''
-    CREATE TABLE feedback (
+    CREATE TABLE IF NOT EXISTS feedback (
         fID TEXT PRIMARY KEY,
         answer TEXT,
         rating INTEGER,
-        timeFeed TEXT,
+        timeFeed TIMESTAMP,
         curConv TEXT,
         FOREIGN KEY (curConv) REFERENCES conversation(cID)
     )
     ''')
 
     cursor.execute('''
-    CREATE TABLE chatHistory (
+    CREATE TABLE IF NOT EXISTS chatHistory (
         chatID TEXT PRIMARY KEY,
-        duration TEXT DEFAULT '0',
+        duration INTEGER DEFAULT 0,
         chatUser TEXT,
         curConv TEXT,
         subject TEXT,
@@ -98,7 +135,7 @@ def init_table():
     ''')
 
     cursor.execute('''
-    CREATE TABLE preference (
+    CREATE TABLE IF NOT EXISTS preference (
         prefUser TEXT,
         prefCg CHAR(8),
         preTime TEXT NOT NULL,
@@ -109,7 +146,7 @@ def init_table():
     ''')
 
 
-def init_gui():
+def init_gui(cID):
     # Create the GUI window
     window = tk.Tk()
     window.title("ZZapGPT")
@@ -123,7 +160,7 @@ def init_gui():
     entry.pack()
 
     # Create the button to submit user input
-    button = tk.Button(window, text="Send", command=lambda: gpt_conv(entry, text_box))
+    button = tk.Button(window, text="Send", command=lambda: gpt_conv(entry, text_box, cID))
     button.pack()
 
     # Return the necessary GUI components
@@ -136,10 +173,42 @@ def generate_answer(user_input):
     messages=[{"role": "user", "content": user_input}]
     )
 
-    return response.choices[0].message.content
+    timeFeed = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def gpt_conv(entry, text_box):
+    return response.choices[0].message.content, timeFeed
 
+def gpt_conv(entry, text_box, cID):
+
+    # Extracting and storing the attributes
+    status = 0  # Set the initial status as "closed"
+    startT = None
+    endT = None
+    timeQu = None  # Current timestamp
+    timeFeed = None  # Current timestamp
+    rating = None  # Initialize rating as None
+    duration = None  # Placeholder for duration, will be calculated later
+    subject = None  # Placeholder for subject, extract from conversation context
+    preference = None  # Placeholder for preference, extract from user input
+
+    timeQu = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Current timestamp for user question
+
+    user_input = entry.get()
+
+    # create a chat completion, and the answer's time
+    answer, timeFeed = generate_answer(user_input)
+
+    # record Question and Answer
+    record_Q(user_input, timeQu, cID)
+    record_Fd(answer, timeFeed, cID)
+
+    # Display the user input and chatbot response in the text box
+    text_box.insert(tk.END, "User: " + user_input + "\n")
+    text_box.insert(tk.END, "ChatGPT: " + answer + "\n\n")
+
+    # Clear the entry field
+    entry.delete(0, tk.END)
+
+def init_GPT():
     # openai
     openai_version = openai.__version__
 
@@ -161,39 +230,150 @@ def gpt_conv(entry, text_box):
 
     cursor.execute(query, (openai_id, "openai", openai_version))
 
-    user_input = entry.get()
+def init_conv(user):
+    # conversation Attribs
+    cID = "C-"+str(uuid.uuid4())
 
-    # Extracting and storing the attributes
-    status = 0  # Set the initial status as "closed"
-    timequ = None  # Current timestamp
-    timeFeed = None  # Current timestamp
-    rating = None  # Initialize rating as None
-    duration = None  # Placeholder for duration, will be calculated later
-    subject = None  # Placeholder for subject, extract from conversation context
-    preference = None  # Placeholder for preference, extract from user input
+    query = '''
+    INSERT INTO conversation(cID, status, curUser)
+    VALUES(?, ?, ?)
+    '''
+    cursor.execute(query, (cID, 0, user))
 
-    # create a chat completion
-    answer = generate_answer(user_input)
+    return cID
 
-    # Display the user input and chatbot response in the text box
-    text_box.insert(tk.END, "User: " + user_input + "\n")
-    text_box.insert(tk.END, "ChatGPT: " + answer + "\n\n")
+def switch_status(cID):
+    query = '''
+    UPDATE conversation
+    SET status = CASE
+        WHEN status = 0 THEN 1
+        WHEN status = 1 THEN 0
+        ELSE status
+    END
+    WHERE cID = ?
+    '''
+    cursor.execute(query, (cID,))
 
-    # Clear the entry field
-    entry.delete(0, tk.END)
+def record_History(cID, uID):
 
-    conn.commit()
+    # switch status to 0
+    switch_status(cID)
 
+    # set chat time
+    q_st_time ='''
+    SELECT MIN(timeQu)
+    FROM question
+    WHERE curConv = ?
+    '''
+    q_ed1 ='''
+    SELECT MAX(timeFeed)
+    FROM feedback
+    WHERE curConv = ?
+    '''
+    q_ed2 ='''
+    SELECT MAX(timeQu)
+    FROM question
+    WHERE curConv = ?
+    '''
+
+    cursor.execute(q_st_time, (cID,))
+    st_time = cursor.fetchone()[0]
+
+    cursor.execute(q_ed1, (cID,))
+    ed1 = cursor.fetchone()[0]
+
+    cursor.execute(q_ed2, (cID,))
+    ed2 = cursor.fetchone()[0]
+
+    ed_time = max(ed1, ed2)
+
+    q_time = '''
+    INSERT INTO conversation(startTime, endTime)
+    VALUES(?, ?)
+    '''
+    cursor.execute(q_time, (st_time, ed_time,))
+
+    # chatHistory Attribs
+    chat_ID = "CH-"+str(uuid.uuid4())
+    duration = calc_duration(cID)
+    subject = extract_subject(cID)
+    q_ht = '''
+    INSERT INTO chatHistory(chatID, duration, chatUser, curConv, subject)
+    VALUES(?, ?, ?, ?, ?)
+    '''
+    cursor.execute(q_ht, (chat_ID, duration, uID, cID, subject))
+
+def record_Q(content, tm, conv):
+
+    q_ID = "Q-"+str(uuid.uuid4())
+    qry = content
+    qTime = tm
+    curConv = conv
+
+    query = '''
+    INSERT INTO question(qID, query, timeQu, curConv)
+    VALUES(?, ?, ?, ?)
+    '''
+    cursor.execute(query, (q_ID, qry, qTime, curConv))
+
+
+
+def record_Fd(content, tm, conv):
+
+    fd_ID = "FD-"+str(uuid.uuid4())
+    feedback = content
+    fdTime = tm
+    curConv = conv
+
+    query = '''
+    INSERT INTO feedback(fID, answer, timeFeed, curConv)
+    VALUES(?, ?, ?, ?)
+    '''
+    cursor.execute(query, (fd_ID, feedback, fdTime, curConv))
+
+def calc_duration(cID):
+    q_time ='''
+    SELECT startTime, endTime
+    FROM conversation
+    WHERE cID = ?
+    '''
+    cursor.execute(q_time, (cID,))
+    time = cursor.fetchone()
+    if time:
+        st_time = time[0]
+        ed_time = time[1]
+
+    if st_time and ed_time:
+        duration = ed_time - st_time
+        return duration.total_seconds()
 
 def main():
     # create Tables
     init_table()
 
+    # Init GPT
+    init_GPT()
+
+    # Insert user values
+    us = init_user()
+
+    # Initialize Conversation
+    cID = init_conv(us)
+
     # Setup the GUI window and components
-    window, text_box, entry = init_gui()
+    window, text_box, entry = init_gui(cID)
+
+    # switch status to 1
+    switch_status(cID)
 
     # Start the GUI event loop
     window.mainloop()
+
+    # record History
+    record_History(cID, us)
+
+    # commit
+    conn.commit()
 
 if __name__ == '__main__':
     main()

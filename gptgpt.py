@@ -10,7 +10,7 @@ conn = sqlite3.connect('zzapgpt.db')
 cursor = conn.cursor()
 
 # personal openai keys
-openai.api_key = "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"
+openai.api_key = "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"
 
 def extract_subject(cID):
     query = '''
@@ -38,8 +38,10 @@ def extract_subject(cID):
     # Remove leading/trailing whitespace and punctuation marks
     cleaned_input = cleaned_input.strip(' ?.,!')
 
-    # Capitalize the first letter of the subject
-    subject = cleaned_input.capitalize()
+    # Capitalize the first letter of each word in the subject
+    words = cleaned_input.split()
+    subject_words = [word.capitalize() for word in words]
+    subject = ' '.join(subject_words)
 
     return subject
 
@@ -288,10 +290,11 @@ def record_History(cID, uID):
     ed_time = max(ed1, ed2)
 
     q_time = '''
-    INSERT INTO conversation(startTime, endTime)
-    VALUES(?, ?)
+    UPDATE conversation
+    SET startTime = ?, endTime = ?
+    WHERE cID = ?
     '''
-    cursor.execute(q_time, (st_time, ed_time,))
+    cursor.execute(q_time, (st_time, ed_time, cID))
 
     # chatHistory Attribs
     chat_ID = "CH-"+str(uuid.uuid4())
@@ -340,8 +343,8 @@ def calc_duration(cID):
     cursor.execute(q_time, (cID,))
     time = cursor.fetchone()
     if time:
-        st_time = time[0]
-        ed_time = time[1]
+        st_time = datetime.datetime.strptime(time[0], "%Y-%m-%d %H:%M:%S")
+        ed_time = datetime.datetime.strptime(time[1], "%Y-%m-%d %H:%M:%S")
 
     if st_time and ed_time:
         duration = ed_time - st_time

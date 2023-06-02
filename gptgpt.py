@@ -1,4 +1,5 @@
 import openai
+import chatgptpy as chatgpt
 import tkinter as tk
 import sqlite3
 import datetime
@@ -9,8 +10,32 @@ import re
 conn = sqlite3.connect('zzapgpt.db')
 cursor = conn.cursor()
 
-# personal openai keys
-openai.api_key = "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"
+def get_api_key():
+    api_key = None
+
+    def submit_api_key():
+        nonlocal api_key
+        api_key = api_key_entry.get()
+        api_key_entry.delete(0, tk.END)
+        window.destroy()  # Close the window after submitting API key
+        openai.api_key = api_key  # Set the API key
+
+    # Create the GUI window and components
+    window = tk.Tk()
+    window.title("ZZapGPT")
+
+    # Create the entry field for API key
+    api_key_entry = tk.Entry(window, width=100)
+    api_key_entry.pack()
+
+    # Create the button to submit API key
+    api_key_button = tk.Button(window, text="Submit API Key", command=submit_api_key)
+    api_key_button.pack()
+
+    # Start the GUI event loop
+    window.mainloop()
+
+    return str(api_key)
 
 def extract_subject(cID):
     query = '''
@@ -30,7 +55,7 @@ def extract_subject(cID):
         result = ""
 
     # Define a list of common question words to remove from the user input
-    question_words = ['how', 'what', 'where', 'when', 'why', 'which', 'who', 'whom']
+    question_words = ['how', 'what', 'where', 'when', 'why', 'which', 'who', 'whom', 'do', 'does', 'did', 'will', 'would', 'shall', 'should', 'can', 'could', 'may', 'might', 'must', 'ought to', 'need', 'have', 'has', 'had']
 
     # Remove question words from the user input
     cleaned_input = re.sub(r'\b(?:%s)\b' % '|'.join(question_words), '', result, flags=re.IGNORECASE)
@@ -49,14 +74,24 @@ def init_user():
 
     uID = "U-"+str(uuid.uuid4())
     # user 정보 한번만 기입
-    query = '''
-    INSERT INTO user (userID, name, email, regDate, age, location)
-    SELECT ?, "홍길동", "honggildong@naver.com", "2023/05/31", 20, "Seoul"
-    WHERE NOT EXISTS (
-        SELECT 1 FROM user
-    )
-    '''
-    cursor.execute(query, (uID,))
+
+    cursor.execute("SELECT COUNT(*) FROM user")
+    count = cursor.fetchone()[0]
+
+    if not user_check():
+        API = get_api_key()
+
+        query = '''
+        INSERT INTO user (userID, name, email, regDate, age, location, API)
+        SELECT ?, "홍길동", "honggildong@naver.com", "2023/05/31", 20, "Seoul", ?
+        WHERE NOT EXISTS (
+            SELECT 1 FROM user
+        )
+        '''
+        cursor.execute(query, (uID, API,))
+
+    # commit
+    conn.commit()
 
     return uID
 
@@ -79,7 +114,8 @@ def init_table():
         email VARCHAR(256) NOT NULL UNIQUE,
         regDate TEXT,
         age INTEGER,
-        location TEXT
+        location TEXT,
+        API TEXT
     )
     ''')
 
@@ -147,6 +183,16 @@ def init_table():
     )
     ''')
 
+def user_check():
+
+    # Check if user already exist
+    cursor.execute("SELECT COUNT(*) FROM user")
+    count = cursor.fetchone()[0]
+
+    if count == 0:
+        return False
+    else:
+        return True
 
 def init_gui(cID):
     # Create the GUI window
@@ -154,11 +200,11 @@ def init_gui(cID):
     window.title("ZZapGPT")
 
     # Create the text box to display the conversation
-    text_box = tk.Text(window, height=20, width=50)
+    text_box = tk.Text(window, height=40, width=100)
     text_box.pack()
 
     # Create the entry field for user input
-    entry = tk.Entry(window, width=50)
+    entry = tk.Entry(window, width=100)
     entry.pack()
 
     # Create the button to submit user input
@@ -354,11 +400,11 @@ def main():
     # create Tables
     init_table()
 
-    # Init GPT
-    init_GPT()
-
     # Insert user values
     us = init_user()
+
+    # Init GPT
+    init_GPT()
 
     # Initialize Conversation
     cID = init_conv(us)
